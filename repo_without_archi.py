@@ -6,11 +6,11 @@ from github import Github
 from tqdm import tqdm
 
 # ====== CONFIG ======
-GITHUB_TOKEN = "your github token here"
-CLONE_DIR = "/content/drive/MyDrive/verilog_repos_batch"
-LOG_FILE = "/content/drive/MyDrive/cloned_repos_log.txt"
-METADATA_CSV = "/content/drive/MyDrive/repo_metadata.csv"
-UNKNOWN_LOG = "/content/drive/MyDrive/open_unknown_licenses.txt"
+GITHUB_TOKEN = "Token"
+CLONE_DIR = "/home/ulabidez/pc/verilog_scraper/verilog_repos_batch"
+LOG_FILE = "/home/ulabidez/pc/verilog_scraper/cloned_repos_log.txt"
+METADATA_CSV = "/home/ulabidez/pc/verilog_scraper/repo_metadata.csv"
+UNKNOWN_LOG = "/home/ulabidez/pc/verilog_scraper/open_unknown_licenses.txt"
 
 MAX_REPOS_TOTAL = 1000
 MIN_STARS = 1
@@ -42,14 +42,18 @@ csv_writer.writeheader()
 
 # License check based only on keywords
 def is_open_source_license(repo):
-    if repo.license:
-        spdx = repo.license.spdx_id or "Unknown"
-        name = (repo.license.name or "").lower()
-        if any(k in name for k in OPEN_LICENSE_KEYWORDS):
-            with open(UNKNOWN_LOG, "a") as log:
-                log.write(f"{repo.full_name} | {spdx} | {name}\n")
-            return True
+    try:
+        license_obj = getattr(repo, "license", None)
+        if license_obj and getattr(license_obj, "name", None):
+            name = license_obj.name.lower()
+            if any(k in name for k in OPEN_LICENSE_KEYWORDS):
+                with open(UNKNOWN_LOG, "a") as log:
+                    log.write(f"{repo.full_name} | {license_obj.spdx_id} | {name}\n")
+                return True
+    except Exception as e:
+        print(f"[!] License check error for {repo.full_name}: {e}")
     return False
+
 
 # ====== Fetch All Repos (Paginated) ======
 repo_list = []
@@ -74,24 +78,31 @@ skipped_duplicate = 0
 skipped_stars_forks = 0
 failed_clones = 0
 
-for repo in tqdm(repo_list, desc="Cloning Repos"):
+for partial_repo in tqdm(repo_list, desc="Cloning Repos"):
     if total_cloned >= MAX_REPOS_TOTAL:
         break
 
-    full_name = repo.full_name
-    if full_name in downloaded_repos:
-        skipped_duplicate += 1
-        continue
-    if repo.stargazers_count < MIN_STARS or repo.forks_count < MIN_FORKS:
-        skipped_stars_forks += 1
-        continue
-    if not is_open_source_license(repo):
-        skipped_license += 1
-        continue
-
     try:
+        repo = g.get_repo(partial_repo.full_name)  # Upgrade to full object
+        full_name = repo.full_name
+
+        if full_name in downloaded_repos:
+            skipped_duplicate += 1
+            continue
+        if repo.stargazers_count < MIN_STARS or repo.forks_count < MIN_FORKS:
+            skipped_stars_forks += 1
+            continue
+        if not is_open_source_license(repo):
+            skipped_license += 1
+            continue
+        if repo.size == 0:
+            continue
+
+        # Clone
         target_path = os.path.join(CLONE_DIR, full_name.replace("/", "__"))
         subprocess.run(["git", "clone", repo.clone_url, target_path], check=True)
+
+        # Save logs
         with open(LOG_FILE, "a") as f:
             f.write(full_name + "\n")
         csv_writer.writerow({
@@ -104,8 +115,16 @@ for repo in tqdm(repo_list, desc="Cloning Repos"):
             "description": repo.description or ""
         })
         total_cloned += 1
+
     except subprocess.CalledProcessError:
         print(f"[!] Failed to clone: {repo.clone_url}")
+        failed_clones += 1
+    except subprocess.TimeoutExpired:
+        print(f"[!] Clone timeout: {repo.clone_url}")
+        failed_clones += 1
+    except Exception as e:
+        # Use partial_repo.full_name here because repo may be undefined
+        print(f"[!] Unexpected error on repo {full_name}: {e}")
         failed_clones += 1
 
 csv_file.close()
