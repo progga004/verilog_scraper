@@ -6,7 +6,7 @@ from github import Github
 from tqdm import tqdm
 
 # ========== CONFIGURATION ==========
-GITHUB_TOKEN = "token"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 CLONE_DIR = "verilog_repos_new_batch"
 LOG_FILE = "cloned_repos_log_new.txt"
 METADATA_CSV = "repo_metadata_new.csv"
